@@ -12,9 +12,5 @@
 	2. Other common dependencies are:   
 		`open3d, scipy, numpy, math, matplotlib`  
 5. Directory structure:  
-	1. `pgSLAM`: 
-		1. [pgSlam.py](pgSlam/pgSlam.py):  Python script creating dataset, generating g2o file and visualizing pose graph at each stage.  
-		2. [pgSlam.ipynb](pgSlam/pgSlam.ipynb):  Modular and detailed implementation of each function in the `pgSlam.py`.  
-	2. `landmarkSlam`:  
-		1. [landmarkSlam.py](landmarkSlam/landmarkSlam.py):  Python script creating cube and robot positions, generating g2o file and visualizing all the intermediate steps.  
-		2. [landmarkSlam.ipynb](landmarkSlam/landmarkSlam.ipynb):  Modular and detailed implementation of each function in the `landmarkSlam.py`.  
+	1. `pgSLAM`: [pgSlam.ipynb](pgSlam/pgSlam.ipynb):  Modular and detailed implementation of each function in the `pgSlam.py`.  
+	2. `landmarkSlam`: [landmarkSlam.ipynb](landmarkSlam/landmarkSlam.ipynb):  Modular and detailed implementation of each function in the `landmarkSlam.py`.  
