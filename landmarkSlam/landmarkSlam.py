@@ -291,10 +291,16 @@ def writeG2o(trans, cubes):
 	g2o.close()
 
 
+# def optimize():
+#     cmd = "g2o -robustKernel Cauchy -robustKernelWidth 1 -o {} -i 50 {} > /dev/null 2>&1".format(
+#         "opt.g2o", "noise.g2o")
+#     os.system(cmd)
 def optimize():
-	cmd = "g2o -robustKernel Cauchy -robustKernelWidth 1 -o {} -i 50 {} > /dev/null 2>&1".format(
-		"opt.g2o", "noise.g2o")
-	os.system(cmd)
+    graph, values = gtsam.readG2o("noise.g2o", is3D=True)
+    #optimizer
+    optimizer = gtsam.LevenbergMarquardtOptimizer(graph, values)
+    result = optimizer.optimize()
+    gtsam.writeG2o(graph ,result, "opt_gtsam.g2o")
 
 
 def readG2o(fileName):
