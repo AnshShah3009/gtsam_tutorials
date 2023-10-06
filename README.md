@@ -12,5 +12,5 @@
 	2. Other common dependencies are:   
 		`open3d, scipy, numpy, math, matplotlib`  
 5. Directory structure:  
-	1. `pgSLAM`: [pgSlam.ipynb](pgSlam/pgSlam.ipynb):  Modular and detailed implementation of each function in the `pgSlam.py`.  [![Open in Colab]([[https://colab.research.google.com/assets/colab-badge.svg)]([https://colab.research.google.com/github/mhd-medfa/recognize-anything/blob/main/recognize_anything_demo.ipynb](https://colab.research.google.com/drive/1rDH8wC7XqMftrDDOlAdEfXf8B_vowL31?usp=sharing)](https://colab.research.google.com/drive/1rDH8wC7XqMftrDDOlAdEfXf8B_vowL31?usp=sharing)](https://colab.research.google.com/drive/1rDH8wC7XqMftrDDOlAdEfXf8B_vowL31?usp=sharing))
+	1. `pgSLAM`: [pgSlam.ipynb](pgSlam/pgSlam.ipynb):  Modular and detailed implementation of each function in the `pgSlam.py`.  [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1rDH8wC7XqMftrDDOlAdEfXf8B_vowL31?usp=sharing)
 	2. `landmarkSlam`: [landmarkSlam.ipynb](landmarkSlam/landmarkSlam.ipynb):  Modular and detailed implementation of each function in the `landmarkSlam.py`.  
