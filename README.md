@@ -1,5 +1,5 @@
 # gtsam_tutorial  
-
+This repo is the reimplementation of the toy problems from the [g2o_tutorials](https://github.com/UditSinghParihar/g2o_tutorial) with gtsam library
 1. This repository is the tutorial on the general edge types(EDGE_SE2 and EDGE_SE3) and vertex types(VERTEX_SE2 & VERTEX_SE3) found in [g2o](https://github.com/RainerKuemmerle/g2o), using python. The accompanied documentation on results can be found in the [notion page](https://hirohamada.notion.site/Graph-Based-SLAM-6e550b19ebff41b9a8550b9c4442d742).  
 2. We have covered two common scenarios found in SLAM: Pose Graph SLAM and Landmark based SLAM using synthetic dataset. The main goal is to cover how to formulate a graph based optimization problem in proper g2o format, using g2o's vertices, edges and information matrix.  
 3. Problem statement:  
