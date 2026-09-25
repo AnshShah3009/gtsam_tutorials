@@ -1,4 +1,5 @@
 name: gtsam-tut
+# Exercised with numpy 2.4.6, scipy 1.17.1, matplotlib 3.11.2, and open3d 0.20.0.
 channels:
   - conda-forge
 dependencies:

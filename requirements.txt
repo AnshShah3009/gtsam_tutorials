@@ -1,4 +1,5 @@
 # Tested with Python 3.11 and GTSAM 4.3.0.
+# Exercised with numpy 2.4.6, scipy 1.17.1, matplotlib 3.11.2, and open3d 0.20.0.
 # GTSAM 4.3.0 publishes wheels for Python 3.11+.
 gtsam==4.3.0
 numpy>=1.24,<3
