@@ -1,361 +1,350 @@
-import open3d as o3d
-from sys import argv, exit
-import numpy as np
-from scipy.spatial.transform import Rotation as R
+"""Landmark SLAM toy problem with GTSAM.
+
+A robot observes a cube (8 landmarks) from 5 poses. Noisy ICP gives odometry,
+noisy depth gives landmark observations. Joint optimization refines both.
+
+Run:  python landmarkSlam.py            # headless (no Open3D windows)
+      python landmarkSlam.py --show     # with Open3D visualisation
+"""
+
+import argparse
 import copy
 import os
+import sys
+from pathlib import Path
 
+import numpy as np
+from scipy.spatial.transform import Rotation as R
 
-np.random.seed(42)
+import gtsam
+
+HERE = Path(__file__).resolve().parent
+
+# g2o information matrices chosen to match the injected sensor noise:
+# ICP odometry is about 2 m uncertain, while landmark observations are about
+# 0.15 m uncertain. Landmark vertices are points, so their information matrix
+# is 3x3 (six values in g2o's upper-triangular format), not a 6x6 SE(3) matrix.
+ODOM_INFO = "0.2 0 0 0 0 0 0.2 0 0 0 0 0.2 0 0 0 0.2 0 0 0.2 0 0.2"
+LANDMARK_INFO = "44 0 0 44 0 44"
 
 
 def getVertices():
-	points = [[0, 8, 8], [0, 0, 8], [0, 0, 0], [0, 8, 0], [8, 8, 8], [8, 0, 8], [8, 0, 0], [8, 8, 0]]
+    """Cube corners + Open3D spheres for visualisation."""
+    import open3d as o3d
 
-	vertices = []
-
-	for ele in points:
-		if(ele is not None):
-			sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.2)
-			sphere.paint_uniform_color([0.9, 0.2, 0])
-
-			trans = np.identity(4)
-			trans[0, 3] = ele[0]
-			trans[1, 3] = ele[1]
-			trans[2, 3] = ele[2]
-
-			sphere.transform(trans)
-			vertices.append(sphere)
-
-	return vertices, points
+    points = [
+        [0, 8, 8],
+        [0, 0, 8],
+        [0, 0, 0],
+        [0, 8, 0],
+        [8, 8, 8],
+        [8, 0, 8],
+        [8, 0, 0],
+        [8, 8, 0],
+    ]
+    vertices = []
+    for ele in points:
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.2)
+        sphere.paint_uniform_color([0.9, 0.2, 0])
+        trans = np.identity(4)
+        trans[0, 3], trans[1, 3], trans[2, 3] = ele
+        sphere.transform(trans)
+        vertices.append(sphere)
+    return vertices, points
 
 
 def getCloud(cube, color):
-	vertices = []
+    """Point-cloud spheres for one cube observation."""
+    import open3d as o3d
 
-	for ele in cube:	
-		sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.15)
-		sphere.paint_uniform_color(color)
-
-		trans = np.identity(4)
-		trans[0, 3] = ele[0]
-		trans[1, 3] = ele[1]
-		trans[2, 3] = ele[2]
-
-		sphere.transform(trans)
-		vertices.append(sphere)
-
-	return vertices
+    vertices = []
+    for ele in cube:
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.15)
+        sphere.paint_uniform_color(color)
+        trans = np.identity(4)
+        trans[0, 3], trans[1, 3], trans[2, 3] = ele
+        sphere.transform(trans)
+        vertices.append(sphere)
+    return vertices
 
 
 def getFrames():
-	# posei = ( x, y, z, thetaZ(deg) )
+    """Five ground-truth robot poses (x, y, z, yaw_deg)."""
+    import open3d as o3d
 
-	# poses = [[-8, 8, 0, -60], [-10, 4, 0, -30], [-12, 0, 0, 0], [-10, -4, 0, 30], [-8, -8, 0, 60]]
-	poses = [[-12, 0, 0, 0], [-10, -4, 0, 30], [-8, -8, 0, 60], [-4, -12, 0, 75], [0, -16, 0, 80]]
-
-	frames = []
-
-	for pose in poses:
-		T = np.identity(4)
-		T[0, 3], T[1, 3], T[2, 3] = pose[0], pose[1], pose[2]
-		T[0:3, 0:3] = R.from_euler('z', pose[3], degrees=True).as_dcm()
-
-		frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.2, origin=[0, 0, 0])
-		frame.transform(T)
-		frames.append(frame)
-
-	return frames, poses
+    poses = [
+        [-12, 0, 0, 0],
+        [-10, -4, 0, 30],
+        [-8, -8, 0, 60],
+        [-4, -12, 0, 75],
+        [0, -16, 0, 80],
+    ]
+    frames = []
+    for pose in poses:
+        T = np.identity(4)
+        T[0, 3], T[1, 3], T[2, 3] = pose[0], pose[1], pose[2]
+        T[0:3, 0:3] = R.from_euler("z", pose[3], degrees=True).as_matrix()
+        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.2)
+        frame.transform(T)
+        frames.append(frame)
+    return frames, poses
 
 
 def visualizeData(vertices, frames):
-	geometries = []
-	geometries = geometries + vertices + frames
+    import open3d as o3d
 
-	o3d.visualization.draw_geometries(geometries)
+    o3d.visualization.draw_geometries(vertices + frames)
+
+
+def pose_to_matrix(pose):
+    """[x, y, z, yaw_deg] -> 4x4 transform."""
+    T = np.identity(4)
+    T[0, 3], T[1, 3], T[2, 3] = pose[0], pose[1], pose[2]
+    T[0:3, 0:3] = R.from_euler("z", pose[3], degrees=True).as_matrix()
+    return T
 
 
 def getLocalCubes(points, poses):
-	# Returns local point cloud cubes
-	
-	points = np.array(points)
-	poses = np.array(poses)
-
-	nPoses, nPoints, pointDim = poses.shape[0], points.shape[0], points.shape[1]
-	cubes = np.zeros((nPoses, nPoints, pointDim))
-
-	for i, pose in enumerate(poses):
-		cube = []
-
-		T = np.identity(4)
-		T[0, 3], T[1, 3], T[2, 3] = pose[0], pose[1], pose[2]
-		T[0:3, 0:3] = R.from_euler('z', pose[3], degrees=True).as_dcm()
-
-		for pt in np.hstack((points, np.ones((points.shape[0], 1)))):
-			ptLocal = np.linalg.inv(T) @ pt.reshape(4, 1)
-
-			cube.append(ptLocal.squeeze(1)[0:3])
-
-		cubes[i] = np.asarray(cube)
-
-	return cubes
+    """Cube corners expressed in each robot frame."""
+    points = np.asarray(points, dtype=float)
+    cubes = np.zeros((len(poses), len(points), 3))
+    for i, pose in enumerate(poses):
+        T = pose_to_matrix(pose)
+        T_inv = np.linalg.inv(T)
+        for j, pt in enumerate(points):
+            pt_h = np.append(pt, 1.0)
+            cubes[i, j] = (T_inv @ pt_h)[:3]
+    return cubes
 
 
-def addNoiseCubes(cubes, noise=0.15):
-	noisyCubes = np.zeros(cubes.shape)
-
-	for i in range(cubes.shape[0]):
-		noiseMat = np.random.normal(0, noise, cubes[i].size).reshape(cubes[i].shape)
-		noisyCubes[i] = cubes[i] + noiseMat
-
-	return noisyCubes
+def addNoiseCubes(cubes, noise=0.15, seed=42):
+    """Additive Gaussian noise on local landmark observations."""
+    rng = np.random.default_rng(seed)
+    return cubes + rng.normal(0.0, noise, cubes.shape)
 
 
 def draw_registration_result(source, target, transformation):
-	source_temp = copy.deepcopy(source)
-	target_temp = copy.deepcopy(target)
-	source_temp.paint_uniform_color([1, 0.706, 0])
-	target_temp.paint_uniform_color([0, 0.651, 0.929])
-	source_temp.transform(transformation)
+    import open3d as o3d
 
-	vis = o3d.visualization.Visualizer()
-	vis.create_window()
-	vis.add_geometry(source_temp)
-	vis.add_geometry(target_temp)
-	vis.get_render_option().point_size = 15
-	vis.run()
-	vis.destroy_window()
+    src = copy.deepcopy(source)
+    tgt = copy.deepcopy(target)
+    src.paint_uniform_color([1, 0.706, 0])
+    tgt.paint_uniform_color([0, 0.651, 0.929])
+    src.transform(transformation)
+    o3d.visualization.draw_geometries([src, tgt])
 
 
-def registerCubes(trans, cubes):
-	# Registering noisy cubes in first frame
-	
-	cloud1 = getCloud(cubes[0], [0.9, 0.2, 0])
-	cloud2 = getCloud(cubes[1], [0, 0.2, 0.9])
-	cloud3 = getCloud(cubes[2], [0.2, 0.9, 0])
-	cloud4 = getCloud(cubes[3], [0.5, 0, 0.95])
-	cloud5 = getCloud(cubes[4], [0.9, 0.45, 0])
+def registerCubes(trans, cubes, show=True):
+    """Re-project all local cubes into the first frame (for visual checks)."""
+    import open3d as o3d
 
-	T1_2 = trans[0]
-	T2_3 = trans[1]
-	T3_4 = trans[2]
-	T4_5 = trans[3]
+    clouds = [
+        getCloud(cubes[0], [0.9, 0.2, 0]),
+        getCloud(cubes[1], [0, 0.2, 0.9]),
+        getCloud(cubes[2], [0.2, 0.9, 0]),
+        getCloud(cubes[3], [0.5, 0, 0.95]),
+        getCloud(cubes[4], [0.9, 0.45, 0]),
+    ]
+    t01, t12, t23, t34 = trans[0], trans[1], trans[2], trans[3]
+    t02 = t01 @ t12
+    t03 = t02 @ t23
+    t04 = t03 @ t34
+    for mesh in clouds[1]:
+        mesh.transform(t01)
+    for mesh in clouds[2]:
+        mesh.transform(t02)
+    for mesh in clouds[3]:
+        mesh.transform(t03)
+    for mesh in clouds[4]:
+        mesh.transform(t04)
+    if show:
+        o3d.visualization.draw_geometries(sum(clouds, []))
 
-	cloud2 = [ele.transform(T1_2) for ele in cloud2]
-	cloud3 = [ele.transform(T1_2 @ T2_3) for ele in cloud3]
-	cloud4 = [ele.transform(T1_2 @ T2_3 @ T3_4) for ele in cloud4]
-	cloud5 = [ele.transform(T1_2 @ T2_3 @ T3_4 @ T4_5) for ele in cloud5]
 
-	geometries = cloud1 + cloud2 + cloud3 + cloud4 + cloud5
+def icpTransformations(cubes, show=False):
+    """Relative odometry (2 w.r.t. 1, ...) via point-to-point ICP with known data association."""
+    import open3d as o3d
 
-	o3d.visualization.draw_geometries(geometries)
+    pcds = []
+    for cube in cubes:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(np.asarray(cube))
+        pcds.append(pcd)
+
+    corr = o3d.utility.Vector2iVector(np.array([(i, i) for i in range(cubes.shape[1])]))
+    p2p = o3d.pipelines.registration.TransformationEstimationPointToPoint()
+    pairs = [
+        p2p.compute_transformation(pcds[1], pcds[0], corr),
+        p2p.compute_transformation(pcds[2], pcds[1], corr),
+        p2p.compute_transformation(pcds[3], pcds[2], corr),
+        p2p.compute_transformation(pcds[4], pcds[3], corr),
+    ]
+    if show:
+        draw_registration_result(pcds[1], pcds[0], pairs[0])
+    return np.array(pairs)
 
 
-def icpTransformations(cubes):
-	# T1_2 : 2 wrt 1 
+# --- g2o I/O (kept g2o-text for teaching; optimisation itself uses GTSAM) ---
 
-	P1 = cubes[0]
-	P2 = cubes[1]
-	P3 = cubes[2]
-	P4 = cubes[3]
-	P5 = cubes[4]
 
-	pcd1, pcd2, pcd3, pcd4, pcd5 = (o3d.geometry.PointCloud(), o3d.geometry.PointCloud(), 
-	o3d.geometry.PointCloud(), o3d.geometry.PointCloud(), o3d.geometry.PointCloud())
-
-	pcd1.points = o3d.utility.Vector3dVector(P1)
-	pcd2.points = o3d.utility.Vector3dVector(P2)
-	pcd3.points = o3d.utility.Vector3dVector(P3)
-	pcd4.points = o3d.utility.Vector3dVector(P4)
-	pcd5.points = o3d.utility.Vector3dVector(P5)
-
-	corr = np.array([(i, i) for i in range(8)]) 
-
-	p2p = o3d.registration.TransformationEstimationPointToPoint()
-
-	T1_2 = p2p.compute_transformation(pcd2, pcd1, o3d.utility.Vector2iVector(corr))
-	T2_3 = p2p.compute_transformation(pcd3, pcd2, o3d.utility.Vector2iVector(corr))
-	T3_4 = p2p.compute_transformation(pcd4, pcd3, o3d.utility.Vector2iVector(corr))
-	T4_5 = p2p.compute_transformation(pcd5, pcd4, o3d.utility.Vector2iVector(corr))
-
-	# draw_registration_result(pcd2, pcd1, T1_2)
-
-	trans = np.array([T1_2, T2_3, T3_4, T4_5])
-
-	return trans
+def _quat_of(T):
+    return R.from_matrix(T[0:3, 0:3]).as_quat()  # x, y, z, w
 
 
 def writeRobotPose(trans, g2o):
-	# Tw_1: 1 wrt w
+    start = [-12, 0, 0, 0]
+    Tw_1 = pose_to_matrix(start)
+    poses_w = [Tw_1]
+    for T in trans:
+        poses_w.append(poses_w[-1] @ T)
+    for i, Tw in enumerate(poses_w):
+        qx, qy, qz, qw = _quat_of(Tw)
+        g2o.write(
+            f"VERTEX_SE3:QUAT {i + 1} {Tw[0, 3]} {Tw[1, 3]} {Tw[2, 3]} "
+            f"{qx} {qy} {qz} {qw}\n"
+        )
 
-	start = [-12, 0, 0, 0]
 
-	Tw_1 = np.identity(4)
-	Tw_1[0, 3], Tw_1[1, 3], Tw_1[2, 3] = start[0], start[1], start[2]
-	Tw_1[0:3, 0:3] = R.from_euler('z', start[3], degrees=True).as_dcm()
-
-	T1_2, T2_3, T3_4, T4_5 = trans[0], trans[1], trans[2], trans[3]
-
-	Tw_2 = Tw_1 @ T1_2
-	Tw_3 = Tw_2 @ T2_3
-	Tw_4 = Tw_3 @ T3_4
-	Tw_5 = Tw_4 @ T4_5
-
-	pose1 = [Tw_1[0, 3], Tw_1[1, 3], Tw_1[2, 3]] + list(R.from_dcm(Tw_1[0:3, 0:3]).as_quat())
-	pose2 = [Tw_2[0, 3], Tw_2[1, 3], Tw_2[2, 3]] + list(R.from_dcm(Tw_2[0:3, 0:3]).as_quat())
-	pose3 = [Tw_3[0, 3], Tw_3[1, 3], Tw_3[2, 3]] + list(R.from_dcm(Tw_3[0:3, 0:3]).as_quat())
-	pose4 = [Tw_4[0, 3], Tw_4[1, 3], Tw_4[2, 3]] + list(R.from_dcm(Tw_4[0:3, 0:3]).as_quat())
-	pose5 = [Tw_5[0, 3], Tw_5[1, 3], Tw_5[2, 3]] + list(R.from_dcm(Tw_5[0:3, 0:3]).as_quat())
-
-	posesRobot = [pose1, pose2, pose3, pose4, pose5]
-
-	sp = ' '
-
-	for i, (x, y, z, qx, qy, qz, qw) in enumerate(posesRobot):
-		line = "VERTEX_SE3:QUAT " + str(i+1) + sp + str(x) + sp + str(y) + sp + str(z) + sp + str(qx) + sp + str(qy) + sp + str(qz) + sp + str(qw) + '\n'
-		g2o.write(line)
-
-	
-def writeOdom(trans, g2o):	
-	sp = ' '
-	info = '20 0 0 0 0 0 20 0 0 0 0 20 0 0 0 20 0 0 20 0 20'
-
-	for i, T in enumerate(trans):
-		dx, dy, dz = T[0, 3], T[1, 3], T[2, 3]
-
-		qx, qy, qz, qw = list(R.from_dcm(T[0:3, 0:3]).as_quat())
-		
-		line = "EDGE_SE3:QUAT " + str(i+1) + sp + str(i+2) + sp + str(dx) + sp + str(dy) + sp + str(dz) + sp + str(qx) + sp + str(qy) + sp + str(qz) + sp + str(qw) + sp +  info + '\n'
-
-		g2o.write(line)
+def writeOdom(trans, g2o):
+    for i, T in enumerate(trans):
+        qx, qy, qz, qw = _quat_of(T)
+        g2o.write(
+            f"EDGE_SE3:QUAT {i + 1} {i + 2} {T[0, 3]} {T[1, 3]} {T[2, 3]} "
+            f"{qx} {qy} {qz} {qw} {ODOM_INFO}\n"
+        )
 
 
 def writeCubeVertices(cubes, g2o):
-	cube1 = cubes[0]
-
-	start = [-12, 0, 0, 0]
-
-	Tw_1 = np.identity(4)
-	Tw_1[0, 3], Tw_1[1, 3], Tw_1[2, 3] = start[0], start[1], start[2]
-	Tw_1[0:3, 0:3] = R.from_euler('z', start[3], degrees=True).as_dcm()
-
-	cube = []
-
-	for pt in np.hstack((cube1, np.ones((cube1.shape[0], 1)))):
-		ptWorld = Tw_1 @ pt.reshape(4, 1)
-
-		cube.append(ptWorld.squeeze(1)[0:3])
-
-	quat = "0 0 0 1\n"
-	sp = ' '
-
-	for i, (x, y, z) in enumerate(cube):
-		line = "VERTEX_SE3:QUAT " + str(i+6) + sp + str(x) + sp + str(y) + sp + str(z) + sp + quat
-		
-		g2o.write(line)
+    Tw_1 = pose_to_matrix([-12, 0, 0, 0])
+    for i, pt in enumerate(np.asarray(cubes[0])):
+        pt_w = (Tw_1 @ np.append(pt, 1.0))[:3]
+        g2o.write(f"VERTEX_TRACKXYZ {i + 6} {pt_w[0]} {pt_w[1]} {pt_w[2]}\n")
 
 
 def writeLandmarkEdge(cubes, g2o):
-	quat = "0 0 0 1"
-	sp = ' '
-	info = '40 0 0 0 0 0 40 0 0 0 0 40 0 0 0 0.000001 0 0 0.000001 0 0.000001' 
-
-	for i, cube in enumerate(cubes):
-		for j, (x, y, z) in enumerate(cube):
-			line  = "EDGE_SE3:QUAT " + str(i+1) + sp + str(j+6) + sp + str(x) + sp + str(y) + sp + str(z) + sp + quat + sp +  info + '\n'
-
-			g2o.write(line)
+    # EDGE_SE3_TRACKXYZ pose_id point_id offset_id x y z info(3x3 upper triangle)
+    for i, cube in enumerate(cubes):
+        for j, (x, y, z) in enumerate(cube):
+            g2o.write(
+                f"EDGE_SE3_TRACKXYZ {i + 1} {j + 6} 0 {x} {y} {z} {LANDMARK_INFO}\n"
+            )
 
 
-def writeG2o(trans, cubes):
-	g2o = open("noise.g2o", 'w')
-
-	g2o.write('# Robot poses\n\n')
-
-	writeRobotPose(trans, g2o)
-
-	g2o.write("\n # Cube vertices\n\n")
-
-	writeCubeVertices(cubes, g2o)
-
-	g2o.write('\n# Odometry edges\n\n')
-
-	writeOdom(trans, g2o)
-
-	g2o.write('\n# Landmark edges\n\n')
-
-	writeLandmarkEdge(cubes, g2o)
-
-	g2o.write("\nFIX 1\n")
-
-	g2o.close()
+def writeG2o(trans, cubes, path="noise.g2o"):
+    with open(path, "w") as g2o:
+        # EDGE_SE3_TRACKXYZ refers to a zero sensor offset (parameter id 0).
+        g2o.write("PARAMS_SE3OFFSET 0 0 0 0 0 0 0 1\n")
+        g2o.write("# Robot poses\n\n")
+        writeRobotPose(trans, g2o)
+        g2o.write("\n# Cube vertices (points, not poses)\n\n")
+        writeCubeVertices(cubes, g2o)
+        g2o.write("\n# Odometry edges\n\n")
+        writeOdom(trans, g2o)
+        g2o.write("\n# Landmark edges\n\n")
+        writeLandmarkEdge(cubes, g2o)
+        g2o.write("\nFIX 1\n")
+    return str(path)
 
 
-# def optimize():
-#     cmd = "g2o -robustKernel Cauchy -robustKernelWidth 1 -o {} -i 50 {} > /dev/null 2>&1".format(
-#         "opt.g2o", "noise.g2o")
-#     os.system(cmd)
-def optimize():
-    graph, values = gtsam.readG2o("noise.g2o", is3D=True)
-    #optimizer
-    optimizer = gtsam.LevenbergMarquardtOptimizer(graph, values)
-    result = optimizer.optimize()
-    gtsam.writeG2o(graph ,result, "opt_gtsam.g2o")
+def optimize(noise_path="noise.g2o", out_path="opt_gtsam.g2o"):
+    """Optimise a g2o file with GTSAM's Levenberg-Marquardt.
+
+    ``FIX 1`` is understood by the g2o command-line tools, but
+    :func:`gtsam.readG2o` does not turn it into a factor. Add a small prior
+    explicitly so the 3D graph has a fixed world frame, then write ``FIX 1``
+    back into the result for g2o-compatible tools.
+    """
+    graph, values = gtsam.readG2o(str(noise_path), is3D=True)
+    first_pose = values.atPose3(1)
+    prior_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-6] * 6))
+    graph.add(gtsam.PriorFactorPose3(1, first_pose, prior_noise))
+
+    result = gtsam.LevenbergMarquardtOptimizer(graph, values).optimize()
+    print(f"initial error: {graph.error(values):.2f} -> final: {graph.error(result):.2f}")
+    gtsam.writeG2o(graph, result, str(out_path))
+    # gtsam.writeG2o writes vertices and factors but not the explicit prior.
+    with open(out_path, "a") as g2o:
+        g2o.write("\nFIX 1\n")
+    return str(out_path)
 
 
 def readG2o(fileName):
-	f = open(fileName, 'r')
-	A = f.readlines()
-	f.close()
+    """Optimised robot poses (first 5 SE3 vertices) -> (5, 4, 4) array."""
+    poses = []
+    with open(fileName) as f:
+        for line in f:
+            if "VERTEX_SE3:QUAT" not in line:
+                continue
+            parts = line.split()
+            _, ind, x, y, z, qx, qy, qz, qw = parts[:9]
+            if int(ind) > 5:
+                continue
+            T = np.identity(4)
+            T[0, 3], T[1, 3], T[2, 3] = float(x), float(y), float(z)
+            T[0:3, 0:3] = R.from_quat([float(qx), float(qy), float(qz), float(qw)]).as_matrix()
+            poses.append(T)
+    return np.asarray(poses)
 
-	poses = []
 
-	for line in A:
-		if "VERTEX_SE3:QUAT" in line:
-			(ver, ind, x, y, z, qx, qy, qz, qw, newline) = line.split(' ')
-
-			if int(ind) <= 5:
-				T = np.identity(4)
-				T[0, 3], T[1, 3], T[2, 3] = x, y, z
-				T[0:3, 0:3] = R.from_quat([qx, qy, qz, qw]).as_dcm()
-
-				poses.append(T)
-
-	poses = np.asarray(poses)
-
-	return poses
+def readLandmarks(fileName):
+    """Optimised landmark vertices from ``VERTEX_TRACKXYZ`` lines."""
+    landmarks = []
+    with open(fileName) as f:
+        for line in f:
+            if line.startswith("VERTEX_TRACKXYZ"):
+                parts = line.split()
+                landmarks.append([float(value) for value in parts[2:5]])
+    return np.asarray(landmarks)
 
 
 def getRelativeEdge(poses):
-	T1_2 = np.linalg.inv(poses[0]) @ poses[1]
-	T2_3 = np.linalg.inv(poses[1]) @ poses[2]
-	T3_4 = np.linalg.inv(poses[2]) @ poses[3]
-	T4_5 = np.linalg.inv(poses[3]) @ poses[4]
+    return np.array(
+        [
+            np.linalg.inv(poses[0]) @ poses[1],
+            np.linalg.inv(poses[1]) @ poses[2],
+            np.linalg.inv(poses[2]) @ poses[3],
+            np.linalg.inv(poses[3]) @ poses[4],
+        ]
+    )
 
-	trans = np.array([T1_2, T2_3, T3_4, T4_5])
 
-	return trans
+def main(show=False, out_dir=None):
+    out_dir = Path(out_dir) if out_dir else HERE
+    out_dir.mkdir(parents=True, exist_ok=True)
+    vertices, points = getVertices()
+    frames, poses = getFrames()
+    if show:
+        visualizeData(vertices, frames)
+
+    gt_cubes = getLocalCubes(points, poses)
+    noisy_high = addNoiseCubes(gt_cubes, noise=1.8, seed=42)  # for ICP odometry
+    noisy_low = addNoiseCubes(gt_cubes, noise=0.15, seed=1)  # for landmarks
+
+    trans = icpTransformations(noisy_high, show=show)
+    if show:
+        registerCubes(trans, noisy_low, show=True)
+
+    noise_path = writeG2o(trans, noisy_low, path=out_dir / "noise.g2o")
+    opt_path = optimize(noise_path, out_path=out_dir / "opt_gtsam.g2o")
+
+    opt_poses = readG2o(opt_path)
+    print(f"Optimised {len(opt_poses)} poses -> {opt_path}")
+    if show:
+        registerCubes(getRelativeEdge(opt_poses), noisy_low, show=True)
+    return opt_path
 
 
-if __name__ == '__main__':
-	vertices, points = getVertices()
-	frames, poses = getFrames()
-
-	visualizeData(vertices, frames)
-
-	gtCubes = getLocalCubes(points, poses)
-	noisyCubesHigh = addNoiseCubes(gtCubes, noise=1.8)
-	noisyCubesLow = addNoiseCubes(gtCubes, noise=0.15)
-
-	trans = icpTransformations(noisyCubesHigh)
-
-	registerCubes(trans, noisyCubesLow)
-
-	writeG2o(trans, noisyCubesLow)
-
-	optimize()
-
-	optPoses = readG2o("opt.g2o")
-	optEdges = getRelativeEdge(optPoses)
-
-	registerCubes(optEdges, noisyCubesLow)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Landmark SLAM toy problem")
+    parser.add_argument("--show", action="store_true", help="Open3D visualisation")
+    parser.add_argument("--out-dir", default=None, help="Where to write .g2o files")
+    args = parser.parse_args()
+    has_display = (
+        os.name == "nt"
+        or sys.platform == "darwin"
+        or bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    )
+    if args.show and not has_display:
+        print("Warning: no display detected, running headless.")
+        args.show = False
+    main(show=args.show, out_dir=args.out_dir)

@@ -1,0 +1,15 @@
+name: gtsam-tut
+# Exercised with numpy 2.4.6, scipy 1.17.1, matplotlib 3.11.2, and open3d 0.20.0.
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - gtsam==4.3.0
+      - numpy>=1.24,<3
+      - scipy>=1.10,<2
+      - matplotlib>=3.7,<4
+      - open3d>=0.17,<1
+      - jupyter>=1,<2
+      - notebook>=7,<8
