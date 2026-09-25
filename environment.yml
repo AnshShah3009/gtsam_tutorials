@@ -1,0 +1,14 @@
+name: gtsam-tut
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - gtsam==4.3.0
+      - numpy>=1.24,<3
+      - scipy>=1.10,<2
+      - matplotlib>=3.7,<4
+      - open3d>=0.17,<1
+      - jupyter>=1,<2
+      - notebook>=7,<8

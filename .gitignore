@@ -1,2 +1,19 @@
-landmarkSlam/.ipynb_checkpoints/
-pgSlam/.ipynb_checkpoints/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Generated g2o graphs (re-created by running the tutorials)
+**/noise.g2o
+**/opt.g2o
+**/opt_gtsam.g2o
+**/pgSlam_gtsam.g2o
+
+# OS / editor
+.DS_Store
+.vscode/
