@@ -20,12 +20,12 @@ import gtsam
 
 HERE = Path(__file__).resolve().parent
 
-# g2o information matrices. ICP odometry is intentionally noisier than the
-# direct landmark measurements, so landmark edges get a higher weight.
-# Landmark vertices are points, so their information matrix is 3x3 (six values
-# in g2o's upper-triangular format), not a 6x6 SE(3) matrix.
-ODOM_INFO = "20 0 0 0 0 0 20 0 0 0 0 20 0 0 0 20 0 0 20 0 20"
-LANDMARK_INFO = "160 0 0 160 0 160"
+# g2o information matrices chosen to match the injected sensor noise:
+# ICP odometry is about 2 m uncertain, while landmark observations are about
+# 0.15 m uncertain. Landmark vertices are points, so their information matrix
+# is 3x3 (six values in g2o's upper-triangular format), not a 6x6 SE(3) matrix.
+ODOM_INFO = "0.2 0 0 0 0 0 0.2 0 0 0 0 0.2 0 0 0 0.2 0 0 0.2 0 0.2"
+LANDMARK_INFO = "44 0 0 44 0 44"
 
 
 def getVertices():
@@ -251,7 +251,8 @@ def optimize(noise_path="noise.g2o", out_path="opt_gtsam.g2o"):
 
     ``FIX 1`` is understood by the g2o command-line tools, but
     :func:`gtsam.readG2o` does not turn it into a factor. Add a small prior
-    explicitly so the 3D graph has a fixed world frame.
+    explicitly so the 3D graph has a fixed world frame, then write ``FIX 1``
+    back into the result for g2o-compatible tools.
     """
     graph, values = gtsam.readG2o(str(noise_path), is3D=True)
     first_pose = values.atPose3(1)
@@ -261,6 +262,9 @@ def optimize(noise_path="noise.g2o", out_path="opt_gtsam.g2o"):
     result = gtsam.LevenbergMarquardtOptimizer(graph, values).optimize()
     print(f"initial error: {graph.error(values):.2f} -> final: {graph.error(result):.2f}")
     gtsam.writeG2o(graph, result, str(out_path))
+    # gtsam.writeG2o writes vertices and factors but not the explicit prior.
+    with open(out_path, "a") as g2o:
+        g2o.write("\nFIX 1\n")
     return str(out_path)
 
 
